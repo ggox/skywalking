@@ -163,6 +163,7 @@ public class MetricsPersistentWorker extends PersistenceWorker<Metrics> {
 
             for (Metrics metrics : metricsList) {
                 Metrics cachedMetrics = context.get(metrics);
+                boolean isAbandoned = true;
                 if (cachedMetrics != null) {
                     /*
                      * If the metrics is not supportUpdate, defined through MetricsExtension#supportUpdate,
@@ -174,21 +175,25 @@ public class MetricsPersistentWorker extends PersistenceWorker<Metrics> {
                     /*
                      * Merge metrics into cachedMetrics, change only happens inside cachedMetrics.
                      */
-                    cachedMetrics.combine(metrics);
-                    cachedMetrics.calculate();
-                    prepareRequests.add(metricsDAO.prepareBatchUpdate(model, cachedMetrics));
-                    nextWorker(cachedMetrics);
+                    isAbandoned = !cachedMetrics.combine(metrics);
+                    if (isAbandoned) {
+                        cachedMetrics.calculate();
+                        prepareRequests.add(metricsDAO.prepareBatchUpdate(model, cachedMetrics));
+                        nextWorker(cachedMetrics);
+                    }
                 } else {
                     metrics.calculate();
                     prepareRequests.add(metricsDAO.prepareBatchInsert(model, metrics));
                     nextWorker(metrics);
                 }
 
-                /*
-                 * The `metrics` should be not changed in all above process. Exporter is an async process.
-                 */
-                nextExportWorker.ifPresent(exportEvenWorker -> exportEvenWorker.in(
-                    new ExportEvent(metrics, ExportEvent.EventType.INCREMENT)));
+                if (!isAbandoned) {
+                    /*
+                     * The `metrics` should be not changed in all above process. Exporter is an async process.
+                     */
+                    nextExportWorker.ifPresent(exportEvenWorker -> exportEvenWorker.in(
+                        new ExportEvent(metrics, ExportEvent.EventType.INCREMENT)));
+                }
             }
         } catch (Throwable t) {
             log.error(t.getMessage(), t);
